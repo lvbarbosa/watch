@@ -54,7 +54,6 @@ where
     let mut factory_index: HashMap<usize, F::Item> = factories.into_iter().enumerate().collect();
 
     loop {
-        println!("{:?}", factory_index.keys());
         let (_, stopped_index, mut other_tasks) = futures::future::select_all(all_tasks).await;
         other_tasks.push(factory_index.get(&stopped_index).unwrap()());
         factory_index = update_factory_index_keys(factory_index, stopped_index, other_tasks.len() - 1);
