@@ -56,7 +56,8 @@ where
     loop {
         let (_, stopped_index, mut other_tasks) = futures::future::select_all(all_tasks).await;
         other_tasks.push(factory_index.get(&stopped_index).unwrap()());
-        factory_index = update_factory_index_keys(factory_index, stopped_index, other_tasks.len() - 1);
+        factory_index =
+            update_factory_index_keys(factory_index, stopped_index, other_tasks.len() - 1);
         all_tasks = other_tasks;
     }
 }
@@ -68,13 +69,10 @@ fn update_factory_index_keys<T>(
 ) -> HashMap<usize, T> {
     factory_index
         .into_iter()
-        .map(|(mut k, v)| {
-            match k.cmp(&stopped_index) {
-                Ordering::Greater => k -= 1,
-                Ordering::Equal => k = respawned_index,
-                _ => (),
-            }
-            (k, v)
+        .map(|(k, v)| match k.cmp(&stopped_index) {
+            Ordering::Greater => (k - 1, v),
+            Ordering::Equal => (respawned_index, v),
+            _ => (k, v),
         })
         .collect()
 }
