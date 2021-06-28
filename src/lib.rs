@@ -1,3 +1,4 @@
+use futures::future::select_all;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -58,7 +59,7 @@ where
     let mut factory_index: HashMap<usize, F::Item> = factories.into_iter().enumerate().collect();
 
     loop {
-        let (_, stopped_index, other_tasks) = futures::future::select_all(indexed_tasks).await;
+        let (_, stopped_index, other_tasks) = select_all(indexed_tasks).await;
 
         let mut from_to: HashMap<usize, usize> = other_tasks
             .iter()
