@@ -89,7 +89,6 @@ where
 
         indexed_tasks = tasks
             .into_iter()
-            // Might be useful to extract [2]
             .enumerate()
             .map(|(index, inner)| Indexed { index, inner })
             .collect();
