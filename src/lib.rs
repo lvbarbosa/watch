@@ -1,6 +1,25 @@
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
+
+struct Indexed<T> {
+    index: usize,
+    inner: T,
+}
+
+impl<T> Future for Indexed<T>
+where
+    T: Future + Unpin,
+{
+    type Output = T::Output;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        Pin::new(&mut self.get_mut().inner).poll(cx)
+    }
+}
 
 /// Spawns and watches all the futures returned by the given [`Future`]
 /// factories. Any [`Future`] that gets ready is dropped and a new version of it
@@ -20,27 +39,6 @@ use std::future::Future;
 /// # Panic
 ///
 /// This function panics if `factories` is empty.
-///
-/// # Example
-///
-/// ```rust
-/// use std::future::Future;
-/// use std::pin::Pin;
-/// use watch::watch;
-///
-/// async fn task(name: usize) {
-///     println!("task {} called", name);
-/// }
-///
-/// fn make_task_factory(name: usize) -> impl Fn() -> Pin<Box<dyn Future<Output = ()>>> {
-///     move || Box::pin(task(name))
-/// }
-///
-/// #[tokio::main]
-/// async fn main() {
-///     watch(vec![make_task_factory(0), make_task_factory(1)]).await;
-/// }
-/// ```
 pub async fn watch<F, T>(factories: F)
 where
     F: IntoIterator,
@@ -50,29 +48,49 @@ where
 {
     let factories: Vec<F::Item> = factories.into_iter().collect();
 
-    let mut all_tasks: Vec<T> = factories.iter().map(|f| f()).collect();
+    let mut indexed_tasks: Vec<Indexed<T>> = factories
+        .iter()
+        .map(|f| f())
+        .enumerate()
+        .map(|(index, inner)| Indexed { index, inner })
+        .collect();
+
     let mut factory_index: HashMap<usize, F::Item> = factories.into_iter().enumerate().collect();
 
     loop {
-        let (_, stopped_index, mut other_tasks) = futures::future::select_all(all_tasks).await;
-        other_tasks.push(factory_index.get(&stopped_index).unwrap()());
-        factory_index =
-            update_factory_index_keys(factory_index, stopped_index, other_tasks.len() - 1);
-        all_tasks = other_tasks;
-    }
-}
+        let (_, stopped_index, other_tasks) = futures::future::select_all(indexed_tasks).await;
 
-fn update_factory_index_keys<T>(
-    factory_index: HashMap<usize, T>,
-    stopped_index: usize,
-    respawned_index: usize,
-) -> HashMap<usize, T> {
-    factory_index
-        .into_iter()
-        .map(|(k, v)| match k.cmp(&stopped_index) {
-            Ordering::Greater => (k - 1, v),
-            Ordering::Equal => (respawned_index, v),
-            _ => (k, v),
-        })
-        .collect()
+        let mut from_to: HashMap<usize, usize> = other_tasks
+            .iter()
+            .map(|Indexed { index, .. }| index)
+            .enumerate()
+            .map(|(to, from)| (*from, to))
+            .collect();
+        from_to.insert(stopped_index, other_tasks.len());
+
+        let mut tasks: Vec<T> = other_tasks
+            .into_iter()
+            .map(|Indexed { inner, .. }| inner)
+            .collect();
+
+        let respawned_task = factory_index
+            .get(&stopped_index)
+            .expect("invalid index state")();
+        tasks.push(respawned_task);
+
+        factory_index = factory_index
+            .into_iter()
+            .map(|(from, factory)| {
+                let to = *from_to.get(&from).expect("invalid index state");
+                (to, factory)
+            })
+            .collect();
+
+        indexed_tasks = tasks
+            .into_iter()
+            // Might be useful to extract [2]
+            .enumerate()
+            .map(|(index, inner)| Indexed { index, inner })
+            .collect();
+    }
 }
